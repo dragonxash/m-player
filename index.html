@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>愛姉妹 .M 音乐播放器</title>
+<style>
+  :root {
+    --bg: #f5f3ee; --card: #ffffff; --ink: #2c2c2a; --ink2: #6b6961;
+    --line: #e2dfd6; --accent: #8a4b2f; --accent2: #b5785a;
+    --ok: #3b6d11; --warn: #854f0b;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; padding: 32px 16px 64px; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header h1 { font-size: 22px; font-weight: 500; letter-spacing: .5px; }
+  header p { color: var(--ink2); font-size: 13px; margin-top: 6px; line-height: 1.7; }
+  header .tag { display: inline-block; font-size: 11px; color: var(--accent); border: 1px solid var(--accent2); border-radius: 4px; padding: 1px 7px; margin-right: 6px; vertical-align: 1px; }
+  header .tag2 { color: var(--ok); border-color: #97c459; }
+  .drop { margin-top: 22px; border: 2px dashed var(--accent2); border-radius: 12px; background: #fbf9f5; padding: 30px 20px; text-align: center; cursor: pointer; transition: background .15s, border-color .15s; }
+  .drop:hover, .drop.over { background: #fdf3ec; border-color: var(--accent); }
+  .drop .big { font-size: 15px; font-weight: 500; color: var(--accent); }
+  .drop .sub { font-size: 12px; color: var(--ink2); margin-top: 8px; }
+  .drop input { display: none; }
+
+  .card { margin-top: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: none; }
+  .meta { font-size: 12px; color: var(--ink2); line-height: 1.8; margin-bottom: 14px; }
+  .meta b { color: var(--ink); }
+  .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 13px; padding: 8px 18px; border-radius: 8px; cursor: pointer; font-family: inherit; }
+  .btn:hover { border-color: var(--accent2); color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.primary:hover { background: var(--accent2); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn:disabled:hover { border-color: var(--line); color: var(--ink); }
+  .progress { flex: 1; min-width: 200px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .time { font-family: var(--mono); font-size: 12px; color: var(--ink2); white-space: nowrap; }
+  .status { font-size: 12px; color: var(--ink2); margin-top: 12px; }
+  .status .barwrap { width: 100%; background: #efece4; border-radius: 3px; height: 6px; margin-top: 6px; }
+  .status .bar { display: block; width: 0; height: 6px; background: var(--accent); border-radius: 3px; }
+  .volume { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2); }
+  .volume input { width: 90px; }
+  .warn { font-size: 12px; color: var(--warn); background: #fdf6ec; border: 1px solid #eed9bf; border-radius: 8px; padding: 10px 14px; margin-top: 14px; line-height: 1.7; }
+  footer { margin-top: 36px; font-size: 12px; color: var(--ink2); line-height: 1.8; }
+  footer code { background: #efece4; border-radius: 4px; padding: 1px 5px; font-family: var(--mono); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="tag">PC-98</span><span class="tag tag2">TAM 5PLAY5</span> .M 音乐播放器</h1>
+    <p>上传 <b>.M</b> 音乐文件（SILK0.DAT 解包产物），浏览器本地解码 + 4 通道 FM 合成播放。<br>
+       支持播放 / 暂停 / 进度拖动 / 导出 WAV、MP3。</p>
+  </header>
+
+  <div class="drop" id="drop">
+    <div class="big">拖拽 .M 音乐文件到这里，或点击选择</div>
+    <div class="sub">如 OPEN.M / HOME.M / DORAMA.M · 全部处理在本地完成</div>
+    <input type="file" id="file" accept=".m,application/octet-stream">
+  </div>
+
+  <div class="card" id="card">
+    <div class="meta" id="meta"></div>
+    <div class="controls">
+      <button class="btn primary" id="playBtn">▶ 播放</button>
+      <div class="progress"><input type="range" id="seek" min="0" max="1000" value="0"></div>
+      <span class="time" id="time">0:00 / 0:00</span>
+      <div class="volume">音量 <input type="range" id="vol" min="0" max="100" value="80"></div>
+    </div>
+    <div class="controls" style="margin-top:12px">
+      <button class="btn" id="dlWav">导出 WAV</button>
+      <button class="btn" id="dlMp3">导出 MP3</button>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="warn">TAM 5PLAY5 私有格式，当前为逆向中的实验性实现：<br>
+      · 已识别 4 通道并行结构（主旋律 + 低音伴奏）与 MIDI 半音映射<br>
+      · 节奏/音色/通道音量为近似值，可能与原版有差异<br>
+      · 指令集（循环/音量/音色切换）待后续完善</div>
+  </div>
+
+  <footer>
+    结构：<code>u16 0x0006</code> + 音色区（32B/个）+ 节奏区 + 演奏数据（<code>14 00</code> 后 4 个通道偏移）。<br>
+    YM2203（OPN）FM 合成：4 通道 × 4 算子，相位调制。
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
+<script>
+"use strict";
+const drop = document.getElementById("drop"), fileInput = document.getElementById("file");
+const card = document.getElementById("card"), meta = document.getElementById("meta");
+const playBtn = document.getElementById("playBtn"), seek = document.getElementById("seek");
+const timeEl = document.getElementById("time"), statusEl = document.getElementById("status");
+const volInput = document.getElementById("vol");
+
+let ctx = null, buffer = null, src = null, playing = false;
+let t0 = 0, duration = 0, volume = 0.8;
+
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+fileInput.addEventListener("change", () => { if (fileInput.files[0]) load(fileInput.files[0]); });
+
+/* ============ .M 解析 ============ */
+function parseM(data) {
+  if (data.length < 8 || data[0] !== 0x06 || data[1] !== 0x00)
+    return { error: "不是 5PLAY5 .M 文件" };
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const x = dv.getUint16(2, true), y = dv.getUint16(4, true);
+  const voices = Math.max(0, Math.floor((x - 6) / 32));
+  const voicesRaw = [];
+  for (let i = 0; i < voices; i++) voicesRaw.push(data.subarray(6 + i * 32, 6 + i * 32 + 32));
+  const seq = data.subarray(y);
+  // 通道偏移表：seq[8..10) = 14 00 标记, seq[10..18) = 4 个 u16 偏移
+  const chOff = [];
+  for (let i = 0; i < 4; i++) chOff.push(dv.getUint16(y + 10 + i * 2, true));
+  return { voices, voicesRaw, seq, chOff, y };
+}
+
+/* ============ 通道事件解码（配对算法） ============ */
+function decodeChan(stream) {
+  // 跳过前导字节，找到 b0-b3 开头的 4 字节通道头
+  let i = 0;
+  while (i < stream.length && (stream[i] < 0xB0 || stream[i] > 0xB3)) i++;
+  i += 4;   // 跳过 bX YY cZ d0
+  const events = [];
+  let pending = null;
+  const flush = (note, len) => events.push({ note, len });
+  while (i < stream.length) {
+    const b = stream[i];
+    if (b === 0x92) { i++; continue; }            // 段落分隔/循环点
+    if (b <= 0x7F) {
+      if (pending !== null) { flush(pending, 8); pending = null; }
+      pending = b;
+      i++;
+    } else if (b === 0x00) { break; }
+    else {
+      // 收集连续 0x80+ 音长
+      let len = 0;
+      while (i < stream.length && stream[i] > 0x7F && stream[i] !== 0x92 && stream[i] !== 0x00) {
+        len += (stream[i] & 0x7F);
+        i++;
+      }
+      len = Math.max(len, 1);
+      if (pending !== null) { flush(pending, len); pending = null; }
+      else { flush(-1, len); }                    // 休止
+    }
+    if (events.length > 100000) break;
+  }
+  if (pending !== null) flush(pending, 8);
+  return events;
+}
+
+function noteToFreq(n) { return 440 * Math.pow(2, (n - 69) / 12); }
+
+/* ============ FM 合成（4 算子简化） ============ */
+const SR = 44100;
+
+function makeOps(voice) {
+  const p = (i) => voice ? Array.from(voice.subarray(i * 6, i * 6 + 6)) : null;
+  return [0, 1, 2, 3].map(i => {
+    const v = p(i);
+    return {
+      mul: v ? ((v[0] & 0x0F) || 1) : 1,
+      tl: v ? (v[1] & 0x7F) / 127 : 0,
+      ar: v ? (v[2] & 0x1F) + 1 : 20,
+      d1r: v ? (v[3] & 0x1F) : 0,
+      d1l: v ? (v[5] >> 4) / 15 : 0.8,
+      rr: v ? (v[5] & 0x0F) : 8,
+      phase: 0, out: 0, env: 0, state: 0,
+    };
+  });
+}
+
+function opEnv(op, dt) {
+  const R = dt / SR;
+  if (op.state === 0) { op.env = 0; return 0; }
+  if (op.state === 1) { op.env += (1 / (op.ar * 0.004)) * R * 60; if (op.env >= 1) { op.env = 1; op.state = 2; } }
+  else if (op.state === 2) { op.env -= op.d1r * 0.003 * R * 60; if (op.env <= op.d1l) { op.env = op.d1l; op.state = 3; } }
+  else if (op.state === 3) {}
+  else { op.env -= (op.rr + 1) * 0.003 * R * 60; if (op.env <= 0) { op.env = 0; op.state = 0; } }
+  return op.env;
+}
+
+function opTick(op, freq, mod, dt) {
+  op.phase = (op.phase + freq * op.mul * (0x1000 / SR) * 4) % 0x100000;
+  const env = opEnv(op, dt);
+  const ang = (op.phase / 0x100000) * 2 * Math.PI + mod * 0.8;
+  return Math.sin(ang) * env;
+}
+
+function renderSong(channels, voices, seconds) {
+  const n = Math.floor(seconds * SR);
+  const buf = new Float32Array(n);
+  // 每通道状态
+  const st = channels.map((ch, ci) => ({
+    events: ch.events, ev: 0, tickLeft: 0, note: null,
+    ops: makeOps(voices[Math.min(ci, voices.length - 1)]),
+    alg: voices[Math.min(ci, voices.length - 1)] ? voices[Math.min(ci, voices.length - 1)][24] & 7 : 0,
+    gain: ci === 2 ? 1.0 : 0.55,
+  }));
+  const TICK = 0.010;   // 秒/tick
+  for (let t = 0; t < n; t++) {
+    let mix = 0;
+    for (const s of st) {
+      if (s.ev < s.events.length && s.tickLeft <= 0) {
+        const e = s.events[s.ev++];
+        if (e.note >= 0) {
+          s.note = e.note;
+          s.ops.forEach(op => { op.state = 1; op.env = 0; op.phase = 0; });
+        } else {
+          s.note = null;
+          s.ops.forEach(op => { if (op.state !== 0) op.state = 4; });
+        }
+        s.tickLeft = e.len * (SR * TICK);
+      }
+      if (s.tickLeft > 0) s.tickLeft--;
+      if (s.note !== null && s.tickLeft > 0) {
+        const f = noteToFreq(s.note);
+        const a = s.alg;
+        const o1 = opTick(s.ops[0], f, 0, 1);
+        const o2 = opTick(s.ops[1], f, a < 4 ? o1 : 0, 1);
+        const o3 = opTick(s.ops[2], f, a < 2 ? o2 : 0, 1);
+        const o4 = opTick(s.ops[3], f, a < 1 ? o3 : 0, 1);
+        s.ops[0].out = o1; s.ops[1].out = o2; s.ops[2].out = o3; s.ops[3].out = o4;
+        let ch;
+        if (a >= 6) ch = (o1 + o2 + o3 + o4) * 0.5;
+        else if (a >= 4) ch = (o3 + o4) * 0.6;
+        else ch = o4;
+        mix += ch * s.gain;
+      }
+    }
+    buf[t] = Math.tanh(mix * 0.9) * 0.6;   // 软限幅
+  }
+  return buf;
+}
+
+/* ============ 音频播放 ============ */
+function ensureCtx() { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); return ctx; }
+function fmt(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+
+function playAt(pos) {
+  const ac = ensureCtx(); if (ac.state === "suspended") ac.resume();
+  if (src) { try { src.stop(); } catch (e) {} }
+  src = ac.createBufferSource();
+  const ab = ac.createBuffer(1, buffer.length, SR);
+  ab.copyToChannel(buffer, 0);
+  src.buffer = ab;
+  const g = ac.createGain(); g.gain.value = volume;
+  src.connect(g).connect(ac.destination);
+  t0 = ac.currentTime - pos;
+  src.start(0, pos);
+  playing = true;
+  playBtn.textContent = "⏸ 暂停";
+  requestAnimationFrame(updateUI);
+}
+function stopPlay() {
+  if (src) { try { src.stop(); } catch (e) {} src = null; }
+  playing = false; playBtn.textContent = "▶ 播放";
+  seek.value = 0; timeEl.textContent = "0:00 / " + fmt(duration);
+}
+function updateUI() {
+  if (!playing || !src) return;
+  const pos = ensureCtx().currentTime - t0;
+  if (pos >= duration) { stopPlay(); return; }
+  seek.value = pos / duration * 1000;
+  timeEl.textContent = fmt(pos) + " / " + fmt(duration);
+  requestAnimationFrame(updateUI);
+}
+
+/* ============ 加载 ============ */
+function load(f) {
+  f.arrayBuffer().then(buf => {
+    const data = new Uint8Array(buf);
+    const m = parseM(data);
+    if (m.error) { alert(m.error); return; }
+    card.style.display = "block";
+    meta.innerHTML = `文件 <b>${esc(f.name)}</b> · ${(f.size/1024).toFixed(1)} KB · ` +
+      `FM 音色 <b>${m.voices}</b> 个 · 通道偏移 ${m.chOff.map(o=>"0x"+o.toString(16)).join(" ")}`;
+    statusEl.innerHTML = '<div class="barwrap"><div class="bar" style="width:20%"></div></div>解码中…';
+    setTimeout(() => {
+      const channels = m.chOff.map((off, i) => {
+        const stream = off < m.seq.length ? m.seq.subarray(off) : new Uint8Array(0);
+        return { events: decodeChan(stream), name: "ch" + i };
+      });
+      // 4 通道并行，时长取最长通道
+      const maxTick = Math.max(...channels.map(c => c.events.reduce((x, e) => x + e.len, 0)));
+      const seconds = Math.min(Math.max(maxTick * 0.010, 8), 300);
+      buffer = renderSong(channels, m.voicesRaw, seconds);
+      duration = seconds;
+      const peak = buffer.reduce((mx, v) => Math.max(mx, Math.abs(v)), 0);
+      statusEl.innerHTML = `合成完成：${channels.map((c,i)=>`${i}:${c.events.length}`).join(" · ")} · 约 ${fmt(seconds)} · 峰值 ${peak.toFixed(2)}`;
+      playBtn.disabled = false;
+      stopPlay();
+    }, 30);
+  });
+}
+function esc(t) { return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+/* ============ 导出 ============ */
+function toWav(f32) {
+  const n = f32.length, w = new DataView(new ArrayBuffer(44 + n * 2));
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) w.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); w.setUint32(4, 36 + n * 2, true); ws(8, "WAVE");
+  ws(12, "fmt "); w.setUint32(16, 16, true); w.setUint16(20, 1, true); w.setUint16(22, 1, true);
+  w.setUint32(24, SR, true); w.setUint32(28, SR * 2, true); w.setUint16(32, 2, true); w.setUint16(34, 16, true);
+  ws(36, "data"); w.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    w.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([w], { type: "audio/wav" });
+}
+function toMp3(f32) {
+  if (typeof lamejs === "undefined") return null;
+  const enc = new lamejs.Mp3Encoder(1, SR, 128);
+  const ch = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    ch[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  const blk = [];
+  for (let i = 0; i < ch.length; i += 1152) blk.push(enc.encodeBuffer(ch.subarray(i, i + 1152)));
+  blk.push(enc.flush());
+  return new Blob(blk, { type: "audio/mp3" });
+}
+function dl(name, blob) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+/* ============ 事件 ============ */
+playBtn.onclick = () => {
+  if (!buffer) return;
+  if (playing) { ensureCtx().suspend(); playing = false; playBtn.textContent = "▶ 播放"; }
+  else playAt(seek.value / 1000 * duration);
+};
+seek.addEventListener("input", () => {
+  if (!buffer) return;
+  const pos = seek.value / 1000 * duration;
+  timeEl.textContent = fmt(pos) + " / " + fmt(duration);
+  if (playing) playAt(pos);
+});
+volInput.addEventListener("input", () => { volume = volInput.value / 100; });
+document.getElementById("dlWav").onclick = () => { if (buffer) dl("music.wav", toWav(buffer)); };
+document.getElementById("dlMp3").onclick = () => {
+  if (!buffer) return;
+  const mp3 = toMp3(buffer);
+  if (mp3) dl("music.mp3", mp3); else alert("MP3 编码器未加载（需联网）");
+};
+</script>
+</body>
+</html>
