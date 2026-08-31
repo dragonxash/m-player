@@ -150,35 +150,48 @@ function decodeChan(stream) {
 
 function noteToFreq(n) { return 440 * Math.pow(2, (n - 69) / 12); }
 
-/* ===== FM 合成 ===== */
+/* ===== FM 合成 =====
+ * 修正版（2026-09-01）：
+ * 1. 相位累加改用正确的 freq/SR（旧版系数错误，频率低 64 倍 → "突突突"）
+ * 2. 包络平滑：音符间先 release 再 attack，消除硬切咔哒声
+ * 3. 2×2 FM 级联（槽A: op0→op1，槽B: op2→op3），调制指数按音色微调
+ * 4. 音符时长遵循驱动逻辑：表值 tick，前 2/3 键开，后 1/3 释放
+ */
 const SR = 44100;
 function makeOps(voice) {
   const p = voice ? Array.from(voice) : null;
-  const op1 = p ? { mul: (p[0] & 0x0F) || 1, tl: (p[1] & 0x7F) / 127, ar: (p[2] & 0x1F) + 1,
-    d1r: (p[3] & 0x1F), d1l: (p[5] >> 4) / 15, rr: (p[5] & 0x0F) } : null;
-  const def = { mul: 1, tl: 0, ar: 20, d1r: 0, d1l: 0.8, rr: 8 };
-  const arr = [op1 || def, { ...def }, { ...def, mul: 2 }, { ...def }];
-  return arr.map(o => ({ ...o, phase: 0, out: 0, env: 0, state: 0 }));
+  const alg = p ? (p[0] & 7) : 0;          // 算法/反馈位（驱动写入 0xB0）
+  const bright = p ? (p[2] & 0x0F) : 0;    // 亮度（驱动 [si+0xb] 特征位）
+  const mi = 0.16 + (alg % 4) * 0.06 + (bright & 3) * 0.02;  // 调制指数
+  const mk = (mul, phase) => ({
+    mul, phase: 0, out: 0, env: 0, state: 0,
+    ar: 0.012, dr: 0.10, sus: 0.55, rr: 0.09, mi
+  });
+  // op0/op1 = 调制/载波（槽A），op2/op3 = 调制/载波（槽B）
+  return [mk(1 + (alg & 1), 0), mk(1, 0), mk(2 - (alg & 1), Math.PI), mk(1, 0)];
 }
 function opEnv(op, dt) {
-  const R = dt / SR;
+  const R = dt / SR;   // 每样本经过的秒数
   if (op.state === 0) { op.env = 0; return 0; }
-  if (op.state === 1) { op.env += (1 / (op.ar * 0.004)) * R * 60; if (op.env >= 1) { op.env = 1; op.state = 2; } }
-  else if (op.state === 2) { op.env -= op.d1r * 0.003 * R * 60; if (op.env <= op.d1l) { op.env = op.d1l; op.state = 3; } }
-  else if (op.state === 3) {}
-  else { op.env -= (op.rr + 1) * 0.003 * R * 60; if (op.env <= 0) { op.env = 0; op.state = 0; } }
+  if (op.state === 1) { op.env += R / op.ar; if (op.env >= 1) { op.env = 1; op.state = 2; } }
+  else if (op.state === 2) { op.env -= R / op.dr; if (op.env <= op.sus) { op.env = op.sus; op.state = 3; } }
+  else if (op.state === 3) { /* sustain */ }
+  else { op.env -= R / op.rr; if (op.env <= 0) { op.env = 0; op.state = 0; } }
   return op.env;
 }
 function opTick(op, freq, mod, dt) {
-  op.phase = (op.phase + freq * op.mul * (0x1000 / SR) * 4) % 0x100000;
+  // 正确相位累加：每样本推进 freq/SR 圈（0-1），mod 为调制器输出
+  op.phase += freq * op.mul / SR;
+  if (op.phase >= 1) op.phase -= Math.floor(op.phase);
   const env = opEnv(op, dt);
-  return Math.sin((op.phase / 0x100000) * 2 * Math.PI + mod * 0.8) * env;
+  return Math.sin(op.phase * 2 * Math.PI + mod * op.mi) * env;
 }
 
 function renderSong(channels, voices, seconds) {
   const n = Math.floor(seconds * SR);
   const buf = new Float32Array(n);
-  const st = channels.map(() => ({ ev: 0, tickLeft: 0, note: null, vol: 0, ops: makeOps(null) }));
+  const st = channels.map(() => ({ ev: 0, tickLeft: 0, totLen: 0, note: null, vol: 0, ops: makeOps(null) }));
+  const chanGain = [0.55, 0.55, 1.0, 0.55];   // 主旋律（通道2）突出，低音垫底
   for (let t = 0; t < n; t++) {
     let mix = 0;
     for (let ci = 0; ci < st.length; ci++) {
@@ -187,28 +200,38 @@ function renderSong(channels, voices, seconds) {
       if (s.ev < evs.length && s.tickLeft <= 0) {
         const e = evs[s.ev++];
         if (e.note >= 0) {
+          // 新音符：先让旧音进入 release（平滑衔接，不硬切）
+          s.ops.forEach(op => { if (op.state !== 0) op.state = 4; });
           s.note = e.note; s.vol = e.vol;
           s.ops = makeOps(voices[Math.min(e.voice, voices.length - 1)]);
           s.ops.forEach(op => { op.state = 1; op.env = 0; op.phase = 0; });
-          s.tickLeft = e.len * (e.sustain ? 2 : 1) * (SR * TICK_SEC);
+          const lenTick = e.len * (e.sustain ? 2 : 1);
+          s.totLen = lenTick * SR * TICK_SEC;
+          s.tickLeft = s.totLen;
         } else {
           s.note = null;
           s.ops.forEach(op => { if (op.state !== 0) op.state = 4; });
           s.tickLeft = 1;
         }
       }
-      if (s.tickLeft > 0) s.tickLeft--;
-      if (s.note !== null && s.tickLeft > 0) {
-        const f = noteToFreq(s.note);
+      if (s.tickLeft > 0) {
+        s.tickLeft--;
+        // 驱动逻辑：音符 2/3 处键关 → 进入释放（后半段自然衰减）
+        if (s.note !== null && s.tickLeft < s.totLen / 3)
+          s.ops.forEach(op => { if (op.state === 3 || op.state === 2) op.state = 4; });
+      }
+      const f = s.note !== null ? noteToFreq(s.note) : 220;
+      if (s.ops.some(op => op.state !== 0)) {
         const o1 = opTick(s.ops[0], f, 0, 1);
         const o2 = opTick(s.ops[1], f, o1, 1);
         const o3 = opTick(s.ops[2], f, 0, 1);
-        const o4 = opTick(s.ops[3], f, 0, 1);
+        const o4 = opTick(s.ops[3], f, o3, 1);
         s.ops[0].out = o1; s.ops[1].out = o2; s.ops[2].out = o3; s.ops[3].out = o4;
-        mix += o2 * 0.5 * (0.4 + s.vol / 15 * 0.6);
+        // 槽A(主) + 槽B(副) 并联输出
+        mix += (o2 * 0.6 + o4 * 0.4) * (0.35 + s.vol / 15 * 0.65) * chanGain[ci];
       }
     }
-    buf[t] = Math.tanh(mix * 1.4) * 0.65;
+    buf[t] = Math.tanh(mix * 1.2) * 0.7;
   }
   return buf;
 }
